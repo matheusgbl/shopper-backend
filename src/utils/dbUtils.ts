@@ -42,3 +42,7 @@ export async function createMeasureOnDatabase(
     ]
   );
 }
+
+export async function updateMeasure(confirmed_value: number, measure_uuid: string) {
+  await pool.query('UPDATE measures SET confirmed_value = $1 WHERE measure_uuid = $2', [confirmed_value, measure_uuid]);
+}

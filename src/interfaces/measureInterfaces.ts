@@ -15,3 +15,8 @@ export interface ErrorResponse {
   error_code: string;
   error_description: string;
 }
+
+export interface ConfirmRequestBody {
+  measure_uuid: string;
+  confirmed_value: number;
+}

@@ -7,9 +7,9 @@ import fs from 'fs';
 import path from 'path';
 import dotenv from "dotenv";
 
-import { measureDatetimeExists, createMeasureOnDatabase } from './utils/dbUtils';
-import { changeTextBasedOnMeasureType, isBase64, isValidDatetimeFormat } from './utils/measureUtils';
-import { MeasureRequestBody, ErrorResponse, MeasureResponse } from './interfaces/measureInterfaces';
+import { measureDatetimeExists, createMeasureOnDatabase, updateMeasure } from './utils/dbUtils';
+import { changeTextBasedOnMeasureType, getMeasureStatus, isBase64, isValidDatetimeFormat } from './utils/measureUtils';
+import { MeasureRequestBody, ErrorResponse, MeasureResponse, ConfirmRequestBody } from './interfaces/measureInterfaces';
 
 dotenv.config();
 
@@ -105,6 +105,58 @@ app.post('/upload', async (req: Request, res: Response) => {
     const errorResponse: ErrorResponse = {
       error_code: 'AI_PROCESSING_ERROR',
       error_description: 'An error occurred while processing the image with Google Generative AI.',
+    };
+    return res.status(500).json(errorResponse);
+  }
+});
+
+app.patch('/confirm', async (req: Request, res: Response) => {
+  const { measure_uuid, confirmed_value } = req.body as ConfirmRequestBody;
+
+  if (typeof measure_uuid !== 'string') {
+    const errorResponse: ErrorResponse = {
+      error_code: 'INVALID_DATA',
+      error_description: 'O id de medida não está correto, por favor verifique e tente novamente',
+    };
+    return res.status(400).json(errorResponse);
+  }
+
+  if (typeof confirmed_value !== 'number') {
+    const errorResponse: ErrorResponse = {
+      error_code: 'INVALID_DATA',
+      error_description: 'O campo de número de confirmação deve ser um número inteiro.',
+    };
+    return res.status(400).json(errorResponse);
+  }
+
+  try {
+    const { exists, confirmed } = await getMeasureStatus(measure_uuid);
+
+    if (!exists) {
+      const errorResponse: ErrorResponse = {
+        error_code: 'MEASURE_NOT_FOUND',
+        error_description: 'Leitura do mês não encontrada',
+      };
+      return res.status(404).json(errorResponse);
+    }
+
+    if (confirmed) {
+      const errorResponse: ErrorResponse = {
+        error_code: 'CONFIRMATION_DUPLICATE',
+        error_description: 'Leitura do mês já realizada',
+      };
+      return res.status(409).json(errorResponse);
+    }
+
+    updateMeasure(confirmed_value, measure_uuid);
+
+    return res.status(200).json({ success: true });
+
+  } catch (error) {
+    console.error('Error processing the request:', error);
+    const errorResponse: ErrorResponse = {
+      error_code: 'PROCESSING_ERROR',
+      error_description: 'An error occurred while processing your request',
     };
     return res.status(500).json(errorResponse);
   }
