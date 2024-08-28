@@ -10,6 +10,7 @@ import dotenv from "dotenv";
 import { measureDatetimeExists, createMeasureOnDatabase, updateMeasure } from './utils/dbUtils';
 import { changeTextBasedOnMeasureType, getMeasureStatus, isBase64, isValidDatetimeFormat } from './utils/measureUtils';
 import { MeasureRequestBody, ErrorResponse, MeasureResponse, ConfirmRequestBody } from './interfaces/measureInterfaces';
+import pool from './db/pool';
 
 dotenv.config();
 
@@ -159,6 +160,66 @@ app.patch('/confirm', async (req: Request, res: Response) => {
       error_description: 'An error occurred while processing your request',
     };
     return res.status(500).json(errorResponse);
+  }
+});
+
+app.get('/:customer_code/list', async (req: Request, res: Response) => {
+  const { customer_code } = req.params;
+  const { measure_type } = req.query;
+
+  if (measure_type && !['WATER', 'GAS'].includes((measure_type as string).toUpperCase())) {
+    return res.status(400).json({
+      error_code: 'INVALID_TYPE',
+      error_description: 'Tipo de medição não permitida',
+    });
+  }
+
+  try {
+    const queryParams = [customer_code];
+    let query = `
+      SELECT 
+        measure_uuid, 
+        measure_datetime, 
+        measure_type, 
+        confirmed_value IS NOT NULL AS has_confirmed, 
+        image_url 
+      FROM 
+        measures 
+      WHERE 
+        customer_code = $1
+    `;
+
+    if (measure_type) {
+      query += ' AND measure_type = $2';
+      queryParams.push((measure_type as string).toUpperCase());
+    }
+
+    const result = await pool.query(query, queryParams);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        error_code: 'MEASURES_NOT_FOUND',
+        error_description: 'Nenhuma leitura encontrada',
+      });
+    }
+
+    return res.status(200).json({
+      customer_code,
+      measures: result.rows.map((row) => ({
+        measure_uuid: row.measure_uuid,
+        measure_datetime: row.measure_datetime,
+        measure_type: row.measure_type,
+        has_confirmed: row.has_confirmed,
+        image_url: row.image_url,
+      })),
+    });
+
+  } catch (error) {
+    console.error('Error querying the database:', error);
+    return res.status(500).json({
+      error_code: 'SERVER_ERROR',
+      error_description: 'Erro no servidor ao buscar as leituras',
+    });
   }
 });
 
