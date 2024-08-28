@@ -7,6 +7,10 @@ import fs from 'fs';
 import path from 'path';
 import dotenv from "dotenv";
 
+import { measureDatetimeExists, createMeasureOnDatabase } from './utils/dbUtils';
+import { changeTextBasedOnMeasureType, isBase64, isValidDatetimeFormat } from './utils/measureUtils';
+import { MeasureRequestBody, ErrorResponse, MeasureResponse } from './interfaces/measureInterfaces';
+
 dotenv.config();
 
 const app = express();
@@ -17,32 +21,6 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY as string);
 
 app.use(bodyParser.json({ limit: '50mb' }));
 app.use(bodyParser.urlencoded({ limit: '50mb', extended: true }));
-
-interface MeasureRequestBody {
-  image: string;
-  customer_code: string;
-  measure_datetime: string;
-  measure_type: 'WATER' | 'GAS';
-}
-
-interface MeasureResponse {
-  image_url: string;
-  measure_value: number;
-  measure_uuid: string;
-}
-
-interface ErrorResponse {
-  error_code: string;
-  error_description: string;
-}
-
-function isBase64(str: string): boolean {
-  try {
-    return Buffer.from(str, 'base64').toString('base64') === str;
-  } catch (err) {
-    return false;
-  }
-}
 
 app.post('/upload', async (req: Request, res: Response) => {
   const { image, customer_code, measure_datetime, measure_type } = req.body as MeasureRequestBody;
@@ -55,6 +33,14 @@ app.post('/upload', async (req: Request, res: Response) => {
     return res.status(400).json(errorResponse);
   }
 
+  if (!isValidDatetimeFormat(measure_datetime)) {
+    const errorResponse: ErrorResponse = {
+      error_code: 'INVALID_DATA',
+      error_description: 'Invalid datetime value',
+    };
+    return res.status(400).json(errorResponse);
+  }
+
   if (!isBase64(image)) {
     const errorResponse: ErrorResponse = {
       error_code: 'INVALID_DATA',
@@ -63,7 +49,7 @@ app.post('/upload', async (req: Request, res: Response) => {
     return res.status(400).json(errorResponse);
   }
 
-  const reportExists = false;
+  const reportExists = await measureDatetimeExists(measure_datetime, measure_type);
 
   if (reportExists) {
     const errorResponse: ErrorResponse = {
@@ -94,7 +80,7 @@ app.post('/upload', async (req: Request, res: Response) => {
           fileUri: uploadResponse.file.uri,
         },
       },
-      { text: "Get the number of battery life in integer and return just how many minutes, just the number" },
+      { text: changeTextBasedOnMeasureType(measure_type) },
     ]);
 
     const response: MeasureResponse = {
@@ -102,7 +88,15 @@ app.post('/upload', async (req: Request, res: Response) => {
       measure_value: parseInt(result.response.text(), 10),
       measure_uuid: uuidv4(),
     };
-    
+
+    createMeasureOnDatabase(
+        path.basename(tempFilePath),             
+        uploadResponse,                 
+        customer_code,                            
+        measure_datetime,                         
+        measure_type,                            
+        result
+    );
 
     return res.status(200).json(response);
 
@@ -115,21 +109,6 @@ app.post('/upload', async (req: Request, res: Response) => {
     return res.status(500).json(errorResponse);
   }
 });
-
-app.get("/", async (req: Request, res: Response) => {
-
-  try {
-    const listFilesResponse = await fileManager.listFiles();
-    
-    for (const file of listFilesResponse.files) {
-      console.log(`name: ${file.name} | display name: ${file.displayName}`);
-    }
-
-    return res.status(200).json(listFilesResponse.files);
-  } catch (error) {
-    console.log(error);
-  }
-})
 
 app.listen(port, () => {
   console.log(`Server is running on http://localhost:${port}`);

@@ -1,9 +1,35 @@
-version: "3.7"
-services:
- api:
-  build:
-   context: .
-   target: production
+version: '3.7'
 
-  ports:
-   - 3000:3000
+services:
+  postgres:
+    image: postgres:14
+    container_name: postgres
+    environment:
+      POSTGRES_USER: ${PG_USER}
+      POSTGRES_PASSWORD: ${PG_PASSWORD}
+      POSTGRES_DB: ${PG_DATABASE}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  node:
+    build: .
+    container_name: node_app
+    depends_on:
+      - postgres
+    environment:
+      PG_USER: ${PG_USER}
+      PG_PASSWORD: ${PG_PASSWORD}
+      PG_DATABASE: ${PG_DATABASE}
+      PG_HOST: postgres
+      PG_PORT: 5432
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+    ports:
+      - "3000:3000"
+    volumes:
+      - .:/usr/src/app
+    command: npm start
+
+volumes:
+  postgres_data:
