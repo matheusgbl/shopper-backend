@@ -1,11 +1,10 @@
 import { Request, Response } from 'express';
-import { isValidDatetimeFormat, isBase64, changeTextBasedOnMeasureType, getMeasureStatus, updateMeasure } from '../services/measureService';
+import { isValidDatetimeFormat, isBase64, changeTextBasedOnMeasureType, getMeasureStatus, updateMeasure, measureDatetimeExists, createMeasureOnDatabase } from '../services/measureService';
 import { ErrorResponse, MeasureResponse, ConfirmRequestBody, MeasureRequestBody } from '../interfaces/measureInterfaces';
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { GoogleAIFileManager } from "@google/generative-ai/server";
 import fs from 'fs';
 import path from 'path';
-import { createMeasureOnDatabase, measureDatetimeExists } from '../utils/dbUtils';
 import { v4 as uuidv4 } from 'uuid';
 import pool from '../config/database';
 
@@ -14,11 +13,12 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY as string);
 
 export async function uploadMeasure(req: Request, res: Response) {
   const { image, customer_code, measure_datetime, measure_type } = req.body as MeasureRequestBody;
-
+  const id = uuidv4();
+  
   if (!image || !customer_code || !measure_datetime || !measure_type) {
     const errorResponse: ErrorResponse = {
       error_code: 'INVALID_DATA',
-      error_description: 'Missing required fields',
+      error_description: 'Alguns dados estão faltando, verifique e tente novamente.',
     };
     return res.status(400).json(errorResponse);
   }
@@ -26,7 +26,7 @@ export async function uploadMeasure(req: Request, res: Response) {
   if (!isValidDatetimeFormat(measure_datetime)) {
     const errorResponse: ErrorResponse = {
       error_code: 'INVALID_DATA',
-      error_description: 'Invalid datetime value',
+      error_description: 'Data informada não está em formato válido, utilize o formato datetime.',
     };
     return res.status(400).json(errorResponse);
   }
@@ -34,7 +34,7 @@ export async function uploadMeasure(req: Request, res: Response) {
   if (!isBase64(image)) {
     const errorResponse: ErrorResponse = {
       error_code: 'INVALID_DATA',
-      error_description: 'Invalid base64 image',
+      error_description: 'Imagem está com formato errado, utilize base64',
     };
     return res.status(400).json(errorResponse);
   }
@@ -52,6 +52,13 @@ export async function uploadMeasure(req: Request, res: Response) {
   try {
     const buffer = Buffer.from(image, 'base64');
     const tempFilePath = path.join(__dirname, `temp_${uuidv4()}.jpg`);
+    const generationConfig = {
+      temperature: 1,
+      topP: 0.95,
+      topK: 64,
+      maxOutputTokens: 8192,
+      responseMimeType: 'application/json',
+    };
 
     fs.writeFileSync(tempFilePath, buffer);
 
@@ -62,21 +69,33 @@ export async function uploadMeasure(req: Request, res: Response) {
 
     fs.unlinkSync(tempFilePath);
 
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro" });
-    const result = await model.generateContent([
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
+    const parts = [
+      { text: changeTextBasedOnMeasureType(measure_type) },
       {
         fileData: {
           mimeType: uploadResponse.file.mimeType,
           fileUri: uploadResponse.file.uri,
         },
-      },
-      { text: changeTextBasedOnMeasureType(measure_type) },
-    ]);
+      }
+    ];
+
+    const result = await model.generateContent({
+      contents: [{ role: "user", parts }],
+      generationConfig,
+    });
+    
+    const responseText = await result.response.text();
+    const jsonResponse = JSON.parse(responseText);
+
+    const measureString = jsonResponse.measure;
+
+    const measureValue = parseInt(measureString, 10);
 
     const response: MeasureResponse = {
       image_url: uploadResponse.file.uri,
-      measure_value: parseInt(result.response.text(), 10),
-      measure_uuid: uuidv4(),
+      measure_value: measureValue,
+      measure_uuid: id,
     };
 
     createMeasureOnDatabase(
@@ -85,7 +104,8 @@ export async function uploadMeasure(req: Request, res: Response) {
         customer_code,                            
         measure_datetime,                         
         measure_type,                            
-        result
+        measureValue,
+        id
     );
 
     return res.status(200).json(response);
@@ -170,7 +190,7 @@ export async function listMeasuresController(req: Request, res: Response) {
         measure_uuid, 
         measure_datetime, 
         measure_type, 
-        confirmed_value IS NOT NULL AS has_confirmed, 
+        confirmed_at IS NOT NULL AS has_confirmed, 
         image_url 
       FROM 
         measures 
